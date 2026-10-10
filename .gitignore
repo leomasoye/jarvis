@@ -1,0 +1,45 @@
+# ================================
+# JARVIS — .gitignore
+# ================================
+
+# Secrets & Configuration locale
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+ENV/
+
+# Données générées automatiquement
+data/chromadb/
+data/jarvis.db
+data/piper_models/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Distribution
+dist/
+build/
+*.spec
