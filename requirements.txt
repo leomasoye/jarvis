@@ -1,0 +1,27 @@
+# Core UI — Étape 1
+PyQt6>=6.7.0
+PyQt6-WebEngine>=6.7.0
+
+# Utilitaires
+python-dotenv>=1.0.0
+
+# LLM (Étape 2)
+ollama>=0.6.0
+
+# STT (décommenté à l'Étape 4)
+faster-whisper>=1.0.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+
+# TTS (décommenté à l'Étape 4)
+piper-tts>=1.2.0
+
+# Mémoire (décommenté à l'Étape 3)
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+
+# Monitoring (Étape 5)
+psutil>=5.9.0
+
+# Outils Agentiques (Étape 6)
+ddgs>=9.0.0

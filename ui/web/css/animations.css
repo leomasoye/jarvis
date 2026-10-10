@@ -1,0 +1,148 @@
+/* ==========================================================
+   JARVIS HUD — Animations & Keyframes
+   Référence : contexte_projet.md §10.2 conventions CSS
+   ========================================================== */
+
+/* ── Pulse / Glow ────────────────────────────────────────── */
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 6px currentColor, 0 0 14px rgba(0, 212, 255, 0.3);
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 2px currentColor, 0 0 6px rgba(0, 212, 255, 0.1);
+  }
+}
+
+@keyframes pulse-glow-purple {
+  0%, 100% { box-shadow: 0 0 8px rgba(139, 92, 246, 0.5), 0 0 20px rgba(139, 92, 246, 0.2); }
+  50%       { box-shadow: 0 0 3px rgba(139, 92, 246, 0.3), 0 0 8px rgba(139, 92, 246, 0.1); }
+}
+
+/* ── Blink (status dot) ──────────────────────────────────── */
+@keyframes blink {
+  0%, 90%, 100% { opacity: 1; }
+  95%           { opacity: 0.3; }
+}
+
+/* ── Spinner rings (AI Core visual) ─────────────────────── */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Welcome Logo Glow ───────────────────────────────────── */
+@keyframes welcome-glow {
+  from { filter: drop-shadow(0 0 20px rgba(0, 212, 255, 0.4)); }
+  to   { filter: drop-shadow(0 0 40px rgba(139, 92, 246, 0.6)); }
+}
+
+/* ── Chat Message Appear ─────────────────────────────────── */
+@keyframes msg-appear {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Thinking Dots Bounce ────────────────────────────────── */
+@keyframes thinking-bounce {
+  0%, 60%, 100% { transform: translateY(0);    opacity: 0.4; }
+  30%           { transform: translateY(-6px); opacity: 1;   }
+}
+
+/* ── Notification Toast ──────────────────────────────────── */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+}
+
+@keyframes toast-timer {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+/* ── Loading Progress Bar ────────────────────────────────── */
+@keyframes loading-shimmer {
+  from { background-position: -200% center; }
+  to   { background-position: 200% center; }
+}
+
+/* ── Fade In ─────────────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Slide Up ────────────────────────────────────────────── */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Slide In Left (sidebar panels) ─────────────────────── */
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ── Boot Sequence (character typing) ───────────────────── */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.boot-cursor::after {
+  content: '█';
+  color: var(--accent-cyan);
+  animation: cursor-blink 0.8s ease-in-out infinite;
+  margin-left: 2px;
+}
+
+/* ── Gradient Border Shimmer ─────────────────────────────── */
+@keyframes border-flow {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ── Stagger helpers ─────────────────────────────────────── */
+.anim-delay-1 { animation-delay: 0.1s; }
+.anim-delay-2 { animation-delay: 0.2s; }
+.anim-delay-3 { animation-delay: 0.3s; }
+.anim-delay-4 { animation-delay: 0.4s; }
+.anim-delay-5 { animation-delay: 0.5s; }

@@ -1,0 +1,255 @@
+/* ==========================================================
+   JARVIS HUD — Design System & Variables CSS
+   Référence : contexte_projet.md §10.2 conventions CSS
+   ========================================================== */
+
+/* ── Reset ──────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── Design Tokens ──────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --bg-primary:       #060810;
+  --bg-secondary:     #090c18;
+  --bg-tertiary:      #0d1220;
+  --bg-panel:         rgba(8, 14, 28, 0.90);
+  --bg-panel-hover:   rgba(13, 22, 44, 0.95);
+  --bg-input:         rgba(6, 10, 22, 0.75);
+  --bg-glass:         rgba(0, 212, 255, 0.04);
+
+  /* Accents */
+  --accent-cyan:         #00d4ff;
+  --accent-cyan-dim:     rgba(0, 212, 255, 0.55);
+  --accent-cyan-ghost:   rgba(0, 212, 255, 0.07);
+  --accent-cyan-glow:    rgba(0, 212, 255, 0.25);
+  --accent-purple:       #8b5cf6;
+  --accent-purple-dim:   rgba(139, 92, 246, 0.55);
+  --accent-purple-ghost: rgba(139, 92, 246, 0.07);
+  --accent-green:        #10b981;
+  --accent-green-dim:    rgba(16, 185, 129, 0.6);
+  --accent-red:          #ef4444;
+  --accent-orange:       #f97316;
+
+  /* Text */
+  --text-primary:   #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted:     #475569;
+  --text-accent:    #00d4ff;
+
+  /* Borders */
+  --border-cyan:   rgba(0, 212, 255, 0.14);
+  --border-purple: rgba(139, 92, 246, 0.14);
+  --border-dim:    rgba(255, 255, 255, 0.05);
+
+  /* Shadows / Glows */
+  --glow-cyan:    0 0 24px rgba(0, 212, 255, 0.35),
+                  0 0 8px  rgba(0, 212, 255, 0.2);
+  --glow-cyan-sm: 0 0 12px rgba(0, 212, 255, 0.25);
+  --glow-purple:  0 0 24px rgba(139, 92, 246, 0.35);
+  --shadow-panel: 0 4px 32px rgba(0, 0, 0, 0.5),
+                  0 0 0 1px var(--border-cyan);
+
+  /* Typography */
+  --font-primary: 'Segoe UI', 'SF Pro Display', -apple-system, system-ui, sans-serif;
+  --font-mono:    'Cascadia Code', 'Consolas', 'Courier New', monospace;
+
+  /* Font Sizes */
+  --text-xs:   11px;
+  --text-sm:   12px;
+  --text-base: 14px;
+  --text-md:   15px;
+  --text-lg:   18px;
+  --text-xl:   22px;
+  --text-2xl:  28px;
+  --text-3xl:  36px;
+
+  /* Spacing */
+  --space-xs:  4px;
+  --space-sm:  8px;
+  --space-md:  16px;
+  --space-lg:  24px;
+  --space-xl:  32px;
+  --space-2xl: 48px;
+
+  /* Layout dims */
+  --header-height:  58px;
+  --sidebar-width:  270px;
+  --footer-height:  72px;
+
+  /* Border Radius */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Transitions */
+  --tr-fast:   150ms ease;
+  --tr-normal: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --tr-slow:   500ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Z-index layers */
+  --z-bg:       0;
+  --z-app:      10;
+  --z-panel:    20;
+  --z-overlay:  50;
+  --z-notif:    100;
+  --z-loading:  200;
+}
+
+/* ── Base Styles ─────────────────────────────────────────── */
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ── Background Layers ──────────────────────────────────── */
+
+/* Grille de fond — inspiration HUD holographique */
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-bg);
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.025) 1px, transparent 1px);
+  background-size: 52px 52px;
+}
+
+/* Radial glow au centre — profondeur */
+.bg-glow {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-bg);
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 70% 60% at 50% 50%,
+    rgba(0, 212, 255, 0.04) 0%,
+    rgba(139, 92, 246, 0.03) 50%,
+    transparent 100%
+  );
+}
+
+/* Lignes de scan CRT — texture subtile */
+.bg-scanlines {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-bg);
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.06) 2px,
+    rgba(0, 0, 0, 0.06) 4px
+  );
+}
+
+/* Vignette — assombrit les bords */
+.bg-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-bg);
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 55%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
+}
+
+/* ── App Container ──────────────────────────────────────── */
+#app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  z-index: var(--z-app);
+}
+
+/* ── Layout Principal ───────────────────────────────────── */
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Panels ─────────────────────────────────────────────── */
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  overflow: hidden;
+  transition: border-color var(--tr-normal), box-shadow var(--tr-normal);
+}
+
+.panel:hover {
+  border-color: rgba(0, 212, 255, 0.25);
+  box-shadow: var(--glow-cyan-sm);
+}
+
+.panel-header {
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-cyan-dim);
+  border-bottom: 1px solid var(--border-cyan);
+  background: rgba(0, 212, 255, 0.04);
+}
+
+.panel-content {
+  padding: var(--space-md);
+}
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-cyan);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--accent-cyan-dim); }
+
+/* ── Selection ──────────────────────────────────────────── */
+::selection {
+  background: rgba(0, 212, 255, 0.2);
+  color: var(--text-primary);
+}
+
+/* ── Utilities ──────────────────────────────────────────── */
+.hidden          { display: none !important; }
+.invisible       { visibility: hidden; }
+.flex            { display: flex; }
+.items-center    { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-xs          { gap: var(--space-xs); }
+.gap-sm          { gap: var(--space-sm); }
+.gap-md          { gap: var(--space-md); }
+.font-mono       { font-family: var(--font-mono); }
+.text-accent     { color: var(--accent-cyan); }
+.text-muted      { color: var(--text-muted); }
+.text-secondary  { color: var(--text-secondary); }
+.uppercase       { text-transform: uppercase; letter-spacing: 0.1em; }
+.truncate        { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="JARVIS — Assistant IA local, interface HUD futuriste." />
+  <title>JARVIS — Assistant IA Local</title>
+
+  <!-- Design System -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/action_card.css">
+  <link rel="stylesheet" href="css/animations.css" />
+
+  <!--
+    Qt WebChannel JS API — injectée par QtWebEngine depuis ses ressources internes.
+    ATTENTION : ne pas remplacer par un CDN. Ce fichier doit être chargé depuis qrc://.
+    Consulter contexte_projet.md §8.5 — Pas de CDN.
+  -->
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+
+  <!-- ── Couches de fond ─────────────────────────────────────────────── -->
+  <div class="bg-grid"      aria-hidden="true"></div>
+  <div class="bg-glow"      aria-hidden="true"></div>
+  <div class="bg-scanlines" aria-hidden="true"></div>
+  <div class="bg-vignette"  aria-hidden="true"></div>
+
+  <!-- ── Application principale ─────────────────────────────────────── -->
+  <div id="app" role="application" aria-label="JARVIS Interface">
+
+    <!-- ── Header ───────────────────────────────────────────────────── -->
+    <header class="hud-header" role="banner">
+
+      <!-- Logo & Brand -->
+      <div class="header-left">
+        <div class="logo-container" title="JARVIS">
+          <div class="logo-pulse" aria-hidden="true"></div>
+          <span class="logo-text">JARVIS</span>
+        </div>
+      </div>
+
+      <!-- Statut central -->
+      <div class="header-center">
+        <div id="status-indicator"
+             class="status-indicator"
+             role="status"
+             aria-live="polite"
+             aria-label="Statut de l'IA">
+          <div id="status-dot" class="status-dot" aria-hidden="true"></div>
+          <span id="status-text" class="status-text">INITIALISATION</span>
+        </div>
+      </div>
+
+      <!-- Infos modèle + horloge + fermeture -->
+      <div class="header-right">
+        <div class="dropdown" id="model-dropdown-container">
+          <div id="model-badge" class="model-badge" title="Choisir le modèle LLM" tabindex="0" aria-haspopup="true" aria-expanded="false">
+            <span id="model-type" class="model-type">RAPIDE</span>
+            <span id="model-name" class="model-name">—</span>
+            <svg class="dropdown-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-left: 4px;">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </div>
+          <div class="dropdown-menu" id="model-dropdown-menu" role="menu">
+            <!-- Rempli dynamiquement par JS via Ollama -->
+            <div class="dropdown-item" data-model="auto" role="menuitem" tabindex="0">
+              <span class="model-type">AUTO</span>
+              <span class="model-name">Routage automatique</span>
+            </div>
+          </div>
+        </div>
+        <time id="clock" class="clock" aria-label="Heure actuelle">00:00:00</time>
+        <button id="close-btn" class="close-btn" title="Fermer Jarvis" aria-label="Fermer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+    </header>
+
+    <!-- ── Layout principal ─────────────────────────────────────────── -->
+    <main class="main-layout" role="main">
+
+      <!-- ── Sidebar gauche ─────────────────────────────────────────── -->
+      <aside class="sidebar" role="complementary" aria-label="Informations système">
+
+        <section class="panel sidebar-panel" aria-label="Performances système">
+          <div class="panel-header">Système</div>
+          <div class="panel-content">
+            <div class="metric-row">
+              <span class="metric-label">CPU</span>
+              <div class="metric-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                <div id="cpu-fill" class="metric-fill" style="width:0%"></div>
+              </div>
+              <span id="cpu-val" class="metric-value">0%</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">RAM</span>
+              <div class="metric-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                <div id="ram-fill" class="metric-fill" style="width:0%"></div>
+              </div>
+              <span id="ram-val" class="metric-value">0%</span>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <!-- ── Zone de chat ────────────────────────────────────────────── -->
+      <section class="chat-section" aria-label="Conversation avec JARVIS">
+
+        <!-- Cerveau IA en fond -->
+        <div class="ai-core-background" aria-hidden="true">
+          <div class="ai-core-visual">
+            <div class="ai-core-ring ring-1"></div>
+            <div class="ai-core-ring ring-2"></div>
+            <div class="ai-core-ring ring-3"></div>
+            <div class="ai-core-center">AI</div>
+          </div>
+        </div>
+
+        <!-- Messages (populé par ui.js) -->
+        <div id="chat-container"
+             class="chat-container"
+             role="log"
+             aria-live="polite"
+             aria-relevant="additions">
+          <!-- Contenu injecté par main.js (showWelcomeScreen) -->
+        </div>
+
+        <!-- Indicateur "Jarvis réfléchit" -->
+        <div id="thinking-indicator"
+             class="thinking-indicator hidden"
+             role="status"
+             aria-live="polite">
+          <div class="thinking-dots" aria-hidden="true">
+            <div class="thinking-dot"></div>
+            <div class="thinking-dot"></div>
+            <div class="thinking-dot"></div>
+          </div>
+          <span>JARVIS analyse votre requête…</span>
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- ── Footer / Barre de saisie ────────────────────────────────── -->
+    <footer class="hud-footer" role="contentinfo">
+
+      <!-- Bouton vocal (activé à l'Étape 4) -->
+      <button id="voice-btn"
+              class="voice-btn"
+              title="Entrée vocale"
+              aria-label="Activer l'entrée vocale">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8"  y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
+
+      <!-- Champ de saisie texte -->
+      <div class="input-wrapper">
+        <input type="text"
+               id="message-input"
+               class="message-input"
+               placeholder="Écrivez votre message… (Entrée pour envoyer)"
+               aria-label="Message à envoyer à JARVIS"
+               autocomplete="off"
+               disabled /><!-- désactivé jusqu'à la connexion bridge -->
+      </div>
+
+      <!-- Bouton Arrêter (visible pendant la génération) -->
+      <button id="stop-btn"
+              class="stop-btn hidden"
+              title="Arrêter la génération"
+              aria-label="Arrêter">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="6" width="12" height="12" rx="2"/>
+        </svg>
+      </button>
+
+      <!-- Bouton Envoyer -->
+      <button id="send-btn"
+              class="send-btn"
+              title="Envoyer le message"
+              aria-label="Envoyer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="22" y1="2"  x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+
+      <!-- Bouton Effacer le contexte -->
+      <button id="clear-btn"
+              class="clear-btn"
+              title="Effacer le contexte de conversation"
+              aria-label="Effacer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14H6L5 6"/>
+          <path d="M10 11v6"/><path d="M14 11v6"/>
+          <path d="M9 6V4h6v2"/>
+        </svg>
+      </button>
+
+    </footer>
+
+  </div><!-- /#app -->
+
+  <!-- ── Conteneur des notifications (toasts) ───────────────────────── -->
+  <div id="notifications"
+       class="notifications-container"
+       role="alert"
+       aria-live="assertive"
+       aria-atomic="false">
+  </div>
+
+  <!-- ── Écran de chargement (affiché jusqu'au boot complet) ────────── -->
+  <div id="loading-screen" class="loading-screen" role="progressbar" aria-label="Démarrage de JARVIS">
+    <div class="loading-content">
+      <div class="loading-logo" aria-hidden="true">JARVIS</div>
+      <p id="loading-text" class="loading-text">INITIALISATION DU SYSTÈME…</p>
+      <div class="loading-bar" aria-hidden="true">
+        <div id="loading-progress" class="loading-progress"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Scripts JS (ordre important) ──────────────────────────────── -->
+  <script src="assets/libs/marked.min.js"></script>
+  <script src="assets/libs/purify.min.js"></script>
+  <script src="assets/libs/mermaid.min.js"></script>
+
+  <script src="js/bridge.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/action_card.js"></script>
+  <script src="js/main.js"></script>
+
+</body>
+</html>
