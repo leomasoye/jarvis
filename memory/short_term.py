@@ -105,6 +105,11 @@ class ShortTermMemory:
     # ── Propriétés ────────────────────────────────────────────────────────────
 
     @property
+    def messages(self) -> list[dict]:
+        """Copie des messages enregistrés dans le buffer."""
+        return list(self._messages)
+
+    @property
     def message_count(self) -> int:
         """Nombre de messages dans le buffer (hors system prompt)."""
         return len(self._messages)

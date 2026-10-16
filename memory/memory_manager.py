@@ -1,8 +1,8 @@
 import logging
 import uuid
-import json
-import ollama
+from typing import Optional
 from datetime import datetime
+import ollama
 from config.settings import Settings
 from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
@@ -47,7 +47,13 @@ class MemoryManager:
             prompt += f"\n\n--- OUTILS DISPONIBLES (ACTIONS PC) ---\n{self.action_manager.get_tool_documentation()}\n"
         return prompt
 
-    def add(self, role: str, content: str, model_used: str = None, tokens: int = None) -> None:
+    def add(
+        self,
+        role: str,
+        content: str,
+        model_used: Optional[str] = None,
+        tokens: Optional[int] = None,
+    ) -> None:
         """
         Ajoute un message à la fois dans le buffer court-terme et dans la DB SQLite.
         """
@@ -115,7 +121,7 @@ class MemoryManager:
         
         # Extraire les messages pour le résumé (hors system prompt)
         messages_text = ""
-        for msg in list(self.short_term._messages):
+        for msg in self.short_term.messages:
             messages_text += f"{msg['role'].capitalize()}: {msg['content']}\n"
 
         prompt = f"""Voici la transcription d'une conversation récente entre l'utilisateur et toi (JARVIS).
@@ -135,7 +141,14 @@ Résumé:"""
                 stream=False
             )
             
-            summary = response.message.content.strip()
+            summary = ""
+            if hasattr(response, "message") and getattr(response, "message", None) is not None:
+                raw_content = getattr(response.message, "content", "")
+                summary = (raw_content or "").strip()
+            elif isinstance(response, dict) and "message" in response:
+                summary = str(response["message"].get("content", "") or "").strip()
+            else:
+                summary = str(response or "").strip()
             
             # Génération des tags/topics (simplifié pour l'instant)
             topics = ["général"]

@@ -12,7 +12,7 @@ Consulter contexte_projet.md §4 pour l'architecture globale.
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import QUrl, QTimer, Qt
+from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -39,9 +39,9 @@ class JarvisPage(QWebEnginePage):
     def javaScriptConsoleMessage(
         self,
         level: QWebEnginePage.JavaScriptConsoleMessageLevel,
-        message: str,
-        line_number: int,
-        source_id: str,
+        message: str | None,
+        lineNumber: int,
+        sourceID: str | None,
     ) -> None:
         level_names = {
             QWebEnginePage.JavaScriptConsoleMessageLevel.InfoMessageLevel:    "INFO",
@@ -49,8 +49,9 @@ class JarvisPage(QWebEnginePage):
             QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:   "ERROR",
         }
         lvl = level_names.get(level, "DBG")
-        src = source_id.split("/")[-1] if source_id else "?"
-        logger.debug(f"[JS:{lvl}] {src}:{line_number} > {message}")
+        src = (sourceID or "").split("/")[-1] if sourceID else "?"
+        msg = message or ""
+        logger.debug(f"[JS:{lvl}] {src}:{lineNumber} > {msg}")
 
 
 class MainWindow(QMainWindow):
@@ -102,9 +103,10 @@ class MainWindow(QMainWindow):
         self.web_view.setStyleSheet("background-color: #060810;")
 
         ws = self.web_page.settings()
-        ws.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
-        ws.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        ws.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
+        if ws is not None:
+            ws.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
+            ws.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+            ws.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -342,11 +344,11 @@ class MainWindow(QMainWindow):
         self._devtools_view.show()
         logger.debug("DevTools ouverts.")
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, a0) -> None:
         """Nettoyage à la fermeture : sauvegarde mémoire et arrêt propre du LLM."""
         logger.info("Fermeture de MainWindow — sauvegarde mémoire et nettoyage LLM...")
         if hasattr(self, 'audio_thread'):
             self.audio_thread.cleanup()
         self.memory_manager.summarize_and_save_session(self.llm_manager.active_model)
         self.llm_manager.cleanup()
-        super().closeEvent(event)
+        super().closeEvent(a0)

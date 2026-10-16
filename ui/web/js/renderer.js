@@ -1,3 +1,4 @@
+/* global mermaid, marked, DOMPurify */
 'use strict';
 
 const Renderer = {

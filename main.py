@@ -12,9 +12,9 @@ from pathlib import Path
 
 # Forcer UTF-8 sur stdout/stderr — Windows (cp1252) ne supporte pas les accents/emojis
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    getattr(sys.stdout, "reconfigure")(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    getattr(sys.stderr, "reconfigure")(encoding="utf-8", errors="replace")
 
 # Garantir que la racine du projet est dans le path Python
 sys.path.insert(0, str(Path(__file__).parent))
@@ -70,15 +70,27 @@ def main() -> int:
         except Exception as e:
             log.warning(f"Impossible de forcer l'icône dans la barre des tâches : {e}")
 
-    app = JarvisApp(sys.argv, settings)
+    # Vérifier et lancer Ollama automatiquement si besoin
+    from core.ollama_service import ensure_ollama_running, preload_model
+    ensure_ollama_running(settings)
 
-    from PyQt6.QtCore import QSharedMemory
-    shared_memory = QSharedMemory("Jarvis_Instance_Lock")
-    if not shared_memory.create(1):
-        log.warning("JARVIS est déjà en cours d'exécution. Arrêt immédiat.")
+    # Précharger le modèle en VRAM dans un thread dédié pour ne pas ralentir l'UI
+    import threading
+    threading.Thread(
+        target=preload_model,
+        args=(settings.OLLAMA_MODEL_FAST,),
+        name="OllamaPreloadThread",
+        daemon=True,
+    ).start()
+
+    app = JarvisApp(sys.argv, settings)
+    if getattr(app, "is_duplicate", False):
         return 0
 
     exit_code = app.exec()
+
+    from core.ollama_service import shutdown_ollama_if_managed
+    shutdown_ollama_if_managed()
 
     log.info(f"Application terminée (code {exit_code}).")
     return exit_code

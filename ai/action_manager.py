@@ -120,10 +120,10 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
         Retourne (False, None) s'il n'y a rien à faire.
         """
         for call in calls:
-            tool_name = call.get("tool")
+            tool_name = str(call.get("tool") or "")
             params = call.get("params", {})
             
-            tool = self.tools.get(tool_name)
+            tool = self.tools.get(tool_name) if tool_name else None
             if not tool:
                 logger.warning(f"[ActionManager] Outil inconnu : {tool_name}")
                 return True, f"Erreur système : l'outil '{tool_name}' n'existe pas."

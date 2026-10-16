@@ -4,6 +4,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from typing import Optional
+
 logger = logging.getLogger(__name__)
 
 class Database:
@@ -66,7 +68,14 @@ class Database:
 
     # ── CRUD Conversations ───────────────────────────────────────────────────
 
-    def save_message(self, session_id: str, role: str, content: str, model_used: str = None, tokens: int = None) -> None:
+    def save_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        model_used: Optional[str] = None,
+        tokens: Optional[int] = None,
+    ) -> None:
         """Sauvegarde un message dans l'historique."""
         timestamp = datetime.now().isoformat()
         with self._get_connection() as conn:

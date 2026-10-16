@@ -4,9 +4,10 @@ Consulter contexte_projet.md §4 pour l'architecture globale.
 """
 import logging
 import sys
+from typing import Optional
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSharedMemory
 from PyQt6.QtGui import QPalette, QColor, QIcon
 
 from config.settings import Settings
@@ -27,6 +28,15 @@ class JarvisApp(QApplication):
     def __init__(self, argv: list[str], settings: Settings) -> None:
         super().__init__(argv)
         self.settings = settings
+        self.is_duplicate: bool = False
+        self.main_window: Optional[MainWindow] = None
+
+        self._lock = QSharedMemory("Jarvis_Instance_Lock")
+        if not self._lock.create(1):
+            logger.warning("JARVIS est déjà en cours d'exécution. Arrêt immédiat.")
+            self.is_duplicate = True
+            return
+
         self._configure_qt()
         self._apply_dark_palette()
         self._set_app_icon()

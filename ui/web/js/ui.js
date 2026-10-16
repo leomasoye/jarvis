@@ -364,10 +364,14 @@ const UI = {
     
     init() {
       if (!this.ctx) {
-        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        try {
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+          return;
+        }
       }
-      if (this.ctx.state === 'suspended') {
-        this.ctx.resume();
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
       }
     },
     
