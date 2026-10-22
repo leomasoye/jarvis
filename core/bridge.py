@@ -56,7 +56,6 @@ class JarvisBridge(QObject):
     show_notification = pyqtSignal(str, str)
     update_model_info = pyqtSignal(str, str)
     add_user_message_ui = pyqtSignal(str)
-    llm_error         = pyqtSignal(str)
     update_system_stats = pyqtSignal(int, int)
 
     # [NOUVEAU] Niveau audio en temps réel pour l'UI

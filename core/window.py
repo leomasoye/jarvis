@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 
 from PyQt6.QtCore import QUrl
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut, QCloseEvent
 from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
@@ -345,7 +345,7 @@ class MainWindow(QMainWindow):
         self._devtools_view.show()
         logger.debug("DevTools ouverts.")
 
-    def closeEvent(self, a0) -> None:
+    def closeEvent(self, a0: QCloseEvent | None) -> None:
         """Nettoyage à la fermeture : sauvegarde mémoire et arrêt propre du LLM."""
         logger.info("Fermeture de MainWindow — sauvegarde mémoire et nettoyage LLM...")
         if hasattr(self, 'audio_thread'):

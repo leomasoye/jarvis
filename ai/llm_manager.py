@@ -14,9 +14,11 @@ Flux de données :
     LLMThread.tool_call_detected → LLMManager._on_tool_call → exécution silencieuse + relance
     LLMThread.error_occurred    → LLMManager._on_error   → notification + statut erreur
 """
+import json
 import re
 import time
 import logging
+from typing import Any, Optional, Dict, List, Union
 import ollama
 from PyQt6.QtCore import QThread, QObject, pyqtSignal
 
@@ -84,8 +86,8 @@ class LLMThread(QThread):
     """
     Thread dédié aux appels Ollama en streaming.
     
-    Nouveauté : Buffer intelligent qui intercepte les tool calls et les
-    patterns d'hallucination AVANT de les envoyer au frontend.
+    Prend en charge le Function Calling natif d'Ollama et le buffer intelligent
+    qui intercepte les tool calls et les patterns d'hallucination.
     """
 
     token_received    = pyqtSignal(str)   # Un token streamé (filtré)
@@ -103,6 +105,8 @@ class LLMThread(QThread):
         self._base_url:  str = "http://localhost:11434"
         self._cancel:    bool = False
         self._options:   dict = {}   # Paramètres Ollama (temperature, etc.)
+        self._tools:     list[dict] = []  # Schémas d'outils pour function calling natif
+        self._native_tools_supported: bool = True
 
     def configure(self, base_url: str) -> None:
         """Configure l'URL du serveur Ollama."""
@@ -111,6 +115,10 @@ class LLMThread(QThread):
     def set_options(self, options: dict) -> None:
         """Configure les paramètres de génération Ollama (temperature, top_p, etc.)."""
         self._options = options
+
+    def set_tools(self, tools: list[dict]) -> None:
+        """Configure les outils disponibles pour le Function Calling natif Ollama."""
+        self._tools = tools
 
     def start_inference(self, messages: list[dict], model: str) -> None:
         """
@@ -139,52 +147,88 @@ class LLMThread(QThread):
         """
         Exécuté dans le thread dédié par Qt.
         
-        Le buffer fonctionne en 2 modes :
-        - MODE NORMAL : les tokens sont émis vers le frontend après un court délai
-          de lookahead pour détecter le début d'un tool_call.
-        - MODE SILENCIEUX : activé dès qu'un pattern d'outil est détecté. Les tokens
-          s'accumulent en silence jusqu'à la fin du stream, puis le signal
-          tool_call_detected est émis.
+        Gère à la fois :
+        1. Le Function Calling natif d'Ollama (détection directe des tool_calls dans le flux)
+        2. Le mode texte/XML de secours avec buffer intelligent de lookahead
         """
         full_response = ""
         buffer = ""              # Buffer de lookahead
         silent_mode = False      # True = on a détecté un tool call, on arrête d'émettre
         text_before_tool = ""    # Texte propre émis avant le tool call
+        native_calls: list[dict] = []
 
         try:
             client = ollama.Client(host=self._base_url)
 
             # Construire les kwargs pour chat()
-            chat_kwargs = {
+            chat_kwargs: dict[str, Any] = {
                 "model": self._model,
                 "messages": self._messages,
                 "stream": True,
             }
             if self._options:
                 chat_kwargs["options"] = self._options
+            if self._tools and self._native_tools_supported:
+                chat_kwargs["tools"] = self._tools
 
-            stream = client.chat(**chat_kwargs)
+            try:
+                stream = client.chat(**chat_kwargs)
+            except ollama.ResponseError as e:
+                err_text = str(e).lower()
+                if self._tools and ("does not support tools" in err_text or "unknown option" in err_text or "tool" in err_text):
+                    logger.warning(f"[LLM] Modèle '{self._model}' ne supporte pas les outils natifs Ollama : {e}. Bascule en mode texte.")
+                    self._native_tools_supported = False
+                    chat_kwargs.pop("tools", None)
+                    stream = client.chat(**chat_kwargs)
+                else:
+                    raise
 
             for chunk in stream:
                 if self._cancel:
                     logger.info("[LLM] Stream interrompu.")
                     return
 
-                token: str = chunk.message.content or ""
-                if not token:
+                msg_obj = getattr(chunk, "message", None)
+                if not msg_obj:
                     continue
 
-                full_response += token
+                token: str = getattr(msg_obj, "content", "") or ""
+                if token:
+                    full_response += token
+                    if not silent_mode:
+                        buffer += token
+
+                # Détection des tool calls natifs Ollama
+                raw_tool_calls = getattr(msg_obj, "tool_calls", None)
+                if raw_tool_calls:
+                    if not silent_mode:
+                        silent_mode = True
+                        text_before_tool = full_response[:len(full_response)]
+                        buffer = ""
+                    for tc in raw_tool_calls:
+                        func = getattr(tc, "function", None)
+                        if func:
+                            name = getattr(func, "name", "")
+                            args = getattr(func, "arguments", {})
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except Exception:
+                                    args = {}
+                            elif not isinstance(args, dict):
+                                args = dict(args) if args else {}
+                            if name:
+                                native_calls.append({"tool": name, "params": args})
 
                 if silent_mode:
                     # En mode silencieux, on accumule sans émettre
                     continue
 
-                buffer += token
+                if not token:
+                    continue
 
-                # Vérifier si le buffer contient un début de tool call
+                # Vérifier si le buffer contient un début de tool call (fallback balises texte)
                 if self._check_tool_call_start(buffer):
-                    # Passage en mode silencieux
                     silent_mode = True
                     text_before_tool = full_response[:len(full_response) - len(buffer)]
                     logger.info("[LLM] Tool call détecté — passage en mode silencieux.")
@@ -202,8 +246,16 @@ class LLMThread(QThread):
             if self._cancel:
                 return
 
-            if silent_mode:
-                # Un tool call a été capturé — extraire et signaler
+            if native_calls:
+                logger.info(f"[LLM] {len(native_calls)} appel(s) d'outil(s) natif(s) capturé(s) via Ollama.")
+                xml_calls = "".join(
+                    f"<tool_call>{json.dumps(c, ensure_ascii=False)}</tool_call>"
+                    for c in native_calls
+                )
+                synthetic_response = f"{text_before_tool}\n{xml_calls}".strip()
+                self.tool_call_detected.emit(synthetic_response, text_before_tool)
+            elif silent_mode:
+                # Un tool call texte/XML a été capturé — extraire et signaler
                 logger.info(f"[LLM] Réponse complète en mode silencieux ({len(full_response)} chars).")
                 self.tool_call_detected.emit(full_response, text_before_tool)
             else:
@@ -345,6 +397,12 @@ class LLMManager(QObject):
         """Injecte les managers nécessaires pour l'exécution silencieuse d'outils."""
         self._memory_manager = memory_manager
         self._action_manager = action_manager
+        if self._action_manager and hasattr(self._action_manager, "get_tools_schema"):
+            self._thread.set_tools(self._action_manager.get_tools_schema())
+            if hasattr(self._action_manager, "on_tool_registered_callbacks"):
+                self._action_manager.on_tool_registered_callbacks.append(
+                    lambda: self._thread.set_tools(self._action_manager.get_tools_schema())
+                )
 
     # ── API publique ─────────────────────────────────────────────────────────
 
@@ -455,6 +513,7 @@ class LLMManager(QObject):
     def set_model(self, model_id: str, update_ui_type: str = None) -> None:
         """Change le modèle actif et met à jour le badge dans le HUD."""
         self._active_model = model_id
+        self._thread._native_tools_supported = True
         if update_ui_type is None:
             if self._route_mode == "AUTO":
                 update_ui_type = "AUTO - AVANCÉ" if model_id == self._settings.OLLAMA_MODEL_ADVANCED else "AUTO - RAPIDE"
@@ -505,6 +564,14 @@ class LLMManager(QObject):
     @property
     def active_model(self) -> str:
         return self._active_model
+
+    def cleanup(self) -> None:
+        """Arrête proprement le thread LLM à la fermeture de l'application."""
+        if hasattr(self, "_thread") and self._thread:
+            self._thread.cancel()
+            self._thread.quit()
+            self._thread.wait(2000)
+        logger.info("[LLMManager] Nettoyage terminé.")
 
     # ── Handlers privés ──────────────────────────────────────────────────────
 

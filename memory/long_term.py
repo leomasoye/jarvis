@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Optional, Union, Dict, Any, List, cast
 import chromadb
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
@@ -16,7 +17,7 @@ class LongTermMemory:
     non pertinents et éviter la pollution du contexte LLM.
     """
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(self, db_path: Union[Path, str]) -> None:
         self.db_path = str(db_path)
         
         # Initialisation du client ChromaDB local
@@ -26,22 +27,22 @@ class LongTermMemory:
         )
         
         # Initialisation de la fonction d'embedding (s'exécute localement)
-        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+        self.embedding_fn: Any = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="paraphrase-multilingual-MiniLM-L12-v2"
         )
         
         # Récupération ou création de la collection
         self.collection_name = "jarvis_memories"
-        self.collection = self.client.get_or_create_collection(
+        self.collection: Any = self.client.get_or_create_collection(
             name=self.collection_name,
-            embedding_function=self.embedding_fn,
+            embedding_function=self.embedding_fn,  # pyrefly: ignore[bad-argument-type] # type: ignore[arg-type]
             metadata={"description": "JARVIS long-term episodic memory"}
         )
         
         logger.info(f"[LongTermMemory] ChromaDB initialisé dans {self.db_path}. "
                     f"Collection '{self.collection_name}' a {self.collection.count()} éléments.")
 
-    def add_memory(self, memory_id: str, summary: str, metadata: dict = None) -> None:
+    def add_memory(self, memory_id: str, summary: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
         Ajoute un résumé de session dans la base de données vectorielle.
         
@@ -50,12 +51,13 @@ class LongTermMemory:
             summary: Le texte du résumé généré par le LLM.
             metadata: Dictionnaire de métadonnées optionnelles (ex: date, topics).
         """
-        if not metadata:
-            metadata = {}
+        # ChromaDB rejette les dictionnaires vides {} dans metadatas -> utiliser None si vide
+        clean_metadata = {k: v for k, v in metadata.items() if v is not None} if metadata else None
+        metadatas: Any = [clean_metadata] if clean_metadata else None
             
         self.collection.add(
             documents=[summary],
-            metadatas=[metadata],
+            metadatas=metadatas,  # pyrefly: ignore[bad-argument-type] # type: ignore[arg-type]
             ids=[memory_id]
         )
         logger.debug(f"[LongTermMemory] Mémoire '{memory_id}' ajoutée.")
@@ -65,7 +67,7 @@ class LongTermMemory:
         query_text: str, 
         top_k: int = 3, 
         distance_threshold: float = 1.2
-    ) -> list[dict]:
+    ) -> List[Dict[str, Any]]:
         """
         Recherche les mémoires les plus pertinentes par rapport au texte fourni.
         
@@ -85,6 +87,9 @@ class LongTermMemory:
         Returns:
             Une liste de dictionnaires contenant 'id', 'summary', 'metadata', 'distance'.
         """
+        if not query_text or not query_text.strip():
+            return []
+
         if self.collection.count() == 0:
             return []
 
@@ -97,11 +102,14 @@ class LongTermMemory:
         memories = []
         if results and results["documents"] and len(results["documents"]) > 0:
             docs = results["documents"][0]
-            metadatas = results["metadatas"][0] if results["metadatas"] else [{}] * len(docs)
+            metadatas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
             ids = results["ids"][0]
             distances = results["distances"][0] if results.get("distances") else [0.0] * len(docs)
             
             for doc, meta, doc_id, distance in zip(docs, metadatas, ids, distances):
+                # S'assurer que les métadonnées ne sont pas None
+                meta = meta or {}
+
                 # Filtrage par seuil de similarité
                 if distance > distance_threshold:
                     logger.info(

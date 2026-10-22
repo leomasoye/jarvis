@@ -1,2 +1,9 @@
 # Configuration Pyrefly pour JARVIS
 python-interpreter-path = "C:/Python311/python.exe"
+
+# ChromaDB SDK types EmbeddingFunction as invariant generic EmbeddingFunction[Embeddable]
+# and metadatas as strict mapping union, which causes false-positives with local embedding functions.
+[[sub-config]]
+matches = "memory/long_term.py"
+[sub-config.errors]
+bad-argument-type = false

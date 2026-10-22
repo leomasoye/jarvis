@@ -91,6 +91,33 @@ class TestActionManagerAdvanced(unittest.TestCase):
         # En séquentiel, cela prendrait >= 0.30s. En parallèle, < 0.25s.
         self.assertLess(elapsed, 0.28, f"L'exécution parallèle a pris {elapsed:.3f}s (devrait être < 0.28s)")
 
+    def test_get_tools_schema_structure(self):
+        schemas = self.am.get_tools_schema()
+        self.assertGreaterEqual(len(schemas), 2)
+        tool_names = [s["function"]["name"] for s in schemas]
+        self.assertIn("slow_safe", tool_names)
+        self.assertIn("strict_tool", tool_names)
+
+        strict_schema = next(s for s in schemas if s["function"]["name"] == "strict_tool")
+        params = strict_schema["function"]["parameters"]
+        self.assertEqual(params["type"], "object")
+        self.assertIn("required_key", params["properties"])
+        self.assertIn("count", params["properties"])
+        self.assertEqual(sorted(params["required"]), ["count", "required_key"])
+
+    def test_tool_registration_callback(self):
+        called = []
+        self.am.on_tool_registered_callbacks.append(lambda: called.append(True))
+        
+        class NewTool(BaseTool):
+            name = "new_tool"
+            description = "Nouveau"
+            parameters_schema = {}
+            
+        self.am.register_tool(NewTool())
+        self.assertEqual(len(called), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -3,7 +3,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, NamedTuple
 
 from tools.base_tool import BaseTool, RiskLevel
 from tools.web_search import WebSearchTool
@@ -14,6 +14,14 @@ from tools.system_info import SystemInfoTool
 from tools.clipboard import ClipboardTool
 
 logger = logging.getLogger(__name__)
+
+
+class _PreparedCall(NamedTuple):
+    """Structure typée pour un appel d'outil préparé et validé."""
+    tool: BaseTool
+    params: Dict[str, Any]
+    raw_call: Dict[str, Any]
+
 
 class ActionManager:
     """
@@ -27,6 +35,10 @@ class ActionManager:
         self.db = None
         self.session_id: str = ""
         
+        # État temporaire pour les actions et callbacks
+        self.pending_actions: Dict[str, dict] = {}
+        self.on_tool_registered_callbacks: list = []
+        
         # Enregistrement des outils
         self.register_tool(WebSearchTool())
         self.register_tool(AppControllerTool())
@@ -35,9 +47,6 @@ class ActionManager:
         self.register_tool(ShellCommandTool())
         self.register_tool(SystemInfoTool())
         self.register_tool(ClipboardTool())
-        
-        # État temporaire pour les actions en attente de confirmation
-        self.pending_actions: Dict[str, dict] = {}
         
         if self.bridge:
             # Connecter les retours de l'UI
@@ -52,6 +61,45 @@ class ActionManager:
     def register_tool(self, tool: BaseTool) -> None:
         self.tools[tool.name] = tool
         logger.info(f"[ActionManager] Outil '{tool.name}' enregistré.")
+        for cb in self.on_tool_registered_callbacks:
+            try:
+                cb()
+            except Exception as e:
+                logger.error(f"[ActionManager] Erreur callback tool registered : {e}")
+
+    def get_tools_schema(self) -> list[dict]:
+        """
+        Génère la liste des outils au format JSON Schema attendu par Ollama / OpenAI.
+        Permet le Function Calling natif sur les modèles récents (Llama 3.1+, Qwen 2.5+).
+        """
+        schemas: list[dict] = []
+        for tool in self.tools.values():
+            properties: dict[str, Any] = {}
+            required: list[str] = []
+            for p_name, p_info in tool.parameters_schema.items():
+                p_type = p_info.get("type", "string")
+                if p_type not in ("string", "number", "integer", "boolean", "array", "object"):
+                    p_type = "string"
+                properties[p_name] = {
+                    "type": p_type,
+                    "description": p_info.get("description", "")
+                }
+                if not p_info.get("optional", False):
+                    required.append(p_name)
+                    
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required
+                    }
+                }
+            })
+        return schemas
 
     def parse_and_clean(self, text: str) -> tuple[list[dict], str]:
         """Extrait toutes les balises <tool_call> ou les blocs JSON isolés, et retourne le texte nettoyé."""
@@ -198,7 +246,7 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
                     session_id=self.session_id,
                     tool_name=tool.name,
                     params=params,
-                    result=str(result),
+                    result=result,
                     risk_level=tool.risk_level.value,
                     user_confirmed=False,
                     execution_time_ms=exec_time_ms,
@@ -207,7 +255,7 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
             except Exception as e:
                 logger.error(f"[ActionManager] Erreur enregistrement audit: {e}")
 
-        return tool.name, str(result), exec_time_ms, success
+        return tool.name, result, exec_time_ms, success
 
     def process_calls(self, calls: list[dict]) -> tuple[bool, Optional[str]]:
         """
@@ -220,7 +268,7 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
             return False, None
 
         # 1. Validation de l'existence des outils et de leurs paramètres
-        prepared_calls = []
+        prepared_calls: list[_PreparedCall] = []
         for call in calls:
             tool_name = str(call.get("tool") or "").strip()
             raw_params = call.get("params", {})
@@ -235,14 +283,14 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
                 logger.warning(f"[ActionManager] Paramètres invalides pour {tool_name} : {err_msg}")
                 return True, f"Erreur de validation pour '{tool_name}' : {err_msg}"
 
-            prepared_calls.append({"tool": tool, "params": clean_params, "raw_call": call})
+            prepared_calls.append(_PreparedCall(tool=tool, params=clean_params, raw_call=call))
 
         # 2. Vérifier s'il y a un outil sensible nécessitant confirmation
-        sensitive_item = next((item for item in prepared_calls if item["tool"].risk_level != RiskLevel.SAFE), None)
+        sensitive_item = next((item for item in prepared_calls if item.tool.risk_level != RiskLevel.SAFE), None)
         if sensitive_item:
-            tool = sensitive_item["tool"]
-            params = sensitive_item["params"]
-            raw_call = sensitive_item["raw_call"]
+            tool = sensitive_item.tool
+            params = sensitive_item.params
+            raw_call = sensitive_item.raw_call
             action_id = f"{tool.name}_{id(raw_call)}"
             self.pending_actions[action_id] = {"tool": tool, "params": params}
             logger.info(f"[ActionManager] Action {tool.name} nécessite confirmation (ID: {action_id}).")
@@ -261,14 +309,14 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
         # 3. Tous les outils sont SAFE
         if len(prepared_calls) == 1:
             item = prepared_calls[0]
-            name, res, _, _ = self._execute_safe_call(item["tool"], item["params"])
+            name, res, _, _ = self._execute_safe_call(item.tool, item.params)
             return True, f"\n[RÉSULTAT DE L'OUTIL {name}]\n{res}\n"
 
         # Exécution parallèle pour les outils SAFE multiples
         results_formatted = []
         with ThreadPoolExecutor(max_workers=min(4, len(prepared_calls))) as executor:
             futures = [
-                executor.submit(self._execute_safe_call, item["tool"], item["params"])
+                executor.submit(self._execute_safe_call, item.tool, item.params)
                 for item in prepared_calls
             ]
             for future in as_completed(futures):
@@ -307,7 +355,7 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
                     session_id=self.session_id,
                     tool_name=tool.name,
                     params=params,
-                    result=str(result),
+                    result=result,
                     risk_level=tool.risk_level.value,
                     user_confirmed=True,
                     execution_time_ms=exec_time_ms,

@@ -62,9 +62,12 @@ class TTS:
             return b""
             
         try:
-            # synthesize_stream retourne un générateur de bytes
-            audio_stream = self.voice.synthesize_stream_raw(text)
-            audio_data = b"".join(list(audio_stream))
+            # synthesize retourne un générateur d'AudioChunk
+            audio_chunks = self.voice.synthesize(text)
+            audio_data = b"".join(
+                chunk.audio_int16_bytes if hasattr(chunk, "audio_int16_bytes") else bytes(chunk)
+                for chunk in audio_chunks
+            )
             return audio_data
         except Exception as e:
             logger.error(f"[TTS] Erreur lors de la synthèse vocale : {e}")
