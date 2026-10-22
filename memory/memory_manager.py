@@ -1,7 +1,10 @@
 import logging
 import uuid
+import json
+import re
 from typing import Optional
 from datetime import datetime
+import locale
 import ollama
 from config.settings import Settings
 from memory.short_term import ShortTermMemory
@@ -29,6 +32,12 @@ class MemoryManager:
         
         self.base_system_prompt = ""
         self.persona = ""
+
+        # Résumé incrémental — compteur de tours depuis le dernier résumé
+        self._turns_since_last_summary: int = 0
+        self._summarize_threshold: int = getattr(settings, 'SUMMARIZE_EVERY_N_TURNS', 8)
+        self._pending_model: str = ""  # Modèle à utiliser pour le résumé incrémental
+
         logger.info(f"[MemoryManager] Initialisé avec session_id={self.session_id}")
 
     def set_system_prompt(self, prompt: str, persona: str = "") -> None:
@@ -39,8 +48,21 @@ class MemoryManager:
         self.short_term.set_system_prompt(self._build_initial_prompt())
 
     def _build_initial_prompt(self) -> str:
-        """Combine le system prompt de base avec le persona et les outils."""
+        """Combine le system prompt de base avec le persona, le contexte temporel et les outils."""
         prompt = self.base_system_prompt
+
+        # Contexte temporel dynamique (injecté à chaque requête)
+        prompt += "\n\n--- CONTEXTE TEMPOREL ---\n"
+        now = datetime.now()
+        # Noms français des jours et mois (indépendant de la locale système)
+        _JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+        _MOIS = ["janvier", "février", "mars", "avril", "mai", "juin",
+                  "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+        jour_nom = _JOURS[now.weekday()]
+        mois_nom = _MOIS[now.month - 1]
+        prompt += f"Date : {jour_nom} {now.day} {mois_nom} {now.year}\n"
+        prompt += f"Heure : {now.strftime('%H:%M')}\n"
+
         if self.persona:
             prompt += f"\n\n--- IDENTITÉ DE L'IA (PERSONA) ---\n{self.persona}\n"
         if self.action_manager:
@@ -56,11 +78,85 @@ class MemoryManager:
     ) -> None:
         """
         Ajoute un message à la fois dans le buffer court-terme et dans la DB SQLite.
+        Déclenche un résumé incrémental si le seuil de tours est atteint.
         """
         # Sauvegarde en RAM
         self.short_term.add(role, content)
         # Sauvegarde sur disque
         self.db.save_message(self.session_id, role, content, model_used, tokens)
+
+        # Mémoriser le modèle courant pour les résumés incrémentaux
+        if model_used and model_used != "SYSTEM":
+            self._pending_model = model_used
+
+        # Compteur de tours pour le résumé incrémental
+        if role == "assistant":
+            self._turns_since_last_summary += 1
+            if self._turns_since_last_summary >= self._summarize_threshold:
+                self._try_incremental_summary()
+
+    def _try_incremental_summary(self) -> None:
+        """
+        Résumé incrémental : sauvegarde la première moitié du contexte dans
+        la mémoire long-terme pour éviter les pertes en cas de crash.
+        """
+        if not self._pending_model:
+            return
+
+        msg_count = self.short_term.message_count
+        if msg_count < 4:
+            return
+
+        # Extraire la première moitié des messages pour le résumé
+        half = msg_count // 2
+        older_messages = self.short_term.messages[:half]
+        messages_text = ""
+        for msg in older_messages:
+            messages_text += f"{msg['role'].capitalize()}: {msg['content'][:200]}\n"
+
+        prompt = f"""Résume cette portion de conversation en 2-3 phrases concises.
+Ne retiens que les faits importants, les décisions et les préférences de l'utilisateur.
+
+Conversation:
+{messages_text}
+
+Résumé:"""
+
+        try:
+            client = ollama.Client(host=self.settings.OLLAMA_BASE_URL)
+            response = client.chat(
+                model=self._pending_model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+                options={"temperature": 0.2, "num_predict": 256}
+            )
+
+            summary = ""
+            if hasattr(response, "message") and getattr(response, "message", None) is not None:
+                summary = (getattr(response.message, "content", "") or "").strip()
+            elif isinstance(response, dict) and "message" in response:
+                summary = str(response["message"].get("content", "") or "").strip()
+
+            if summary:
+                memory_id = str(uuid.uuid4())
+                metadata = {
+                    "date": datetime.now().date().isoformat(),
+                    "type": "incremental",
+                    "session_id": self.session_id,
+                }
+                self.long_term.add_memory(memory_id, summary, metadata)
+                self.db.save_memory(summary, memory_id, ["session_partielle"])
+                logger.info(f"[MemoryManager] Résumé incrémental sauvegardé ({len(summary)} chars).")
+
+                # Compression du contexte court-terme pour préserver la mémoire
+                self.short_term.compress(summary)
+
+                # Extraction non bloquante des faits personnels utilisateur
+                self._extract_and_save_user_profile(messages_text, self._pending_model)
+
+            self._turns_since_last_summary = 0
+        except Exception as e:
+            logger.warning(f"[MemoryManager] Échec du résumé incrémental (non bloquant) : {e}")
 
     def get_messages_for_llm(self, user_input: str) -> list[dict]:
         """
@@ -105,7 +201,10 @@ class MemoryManager:
     def clear_context(self) -> None:
         """Vide le contexte de la session courante."""
         self.short_term.clear()
+        self._turns_since_last_summary = 0
         self.session_id = str(uuid.uuid4())
+        if self.action_manager and hasattr(self.action_manager, "session_id"):
+            self.action_manager.session_id = self.session_id
         logger.info(f"[MemoryManager] Contexte effacé, nouvelle session : {self.session_id}")
 
     def summarize_and_save_session(self, model: str) -> None:
@@ -163,5 +262,60 @@ Résumé:"""
             self.db.save_memory(summary, memory_id, topics)
             
             logger.info("[MemoryManager] Résumé de session sauvegardé avec succès.")
+
+            # Extraction non bloquante des faits personnels durables
+            self._extract_and_save_user_profile(messages_text, model)
         except Exception as e:
             logger.error(f"[MemoryManager] Erreur lors de la génération du résumé: {e}")
+
+    def _extract_and_save_user_profile(self, conversation_text: str, model: str) -> None:
+        """
+        Analyse la conversation pour extraire les faits personnels sur l'utilisateur
+        (préférences, projets, habitudes, identité) et enrichir la table user_profile.
+        """
+        if not model or not conversation_text:
+            return
+
+        prompt = f"""Analyse cette conversation et extrais UNIQUEMENT les faits personnels durables sur l'utilisateur (son prénom, ses outils préférés, ses projets en cours, ses habitudes, son métier, ses préférences).
+Ne retiens AUCUN détail éphémère (ex: la météo du jour ou une simple recherche ponctuelle).
+
+Réponds UNIQUEMENT sous forme d'un objet JSON strict : {{"clé": "valeur", ...}}
+Si aucun fait personnel n'est mentionné, réponds exactement : {{}}
+
+Conversation :
+{conversation_text}
+
+JSON :"""
+        try:
+            client = ollama.Client(host=self.settings.OLLAMA_BASE_URL)
+            response = client.chat(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+                options={"temperature": 0.1, "num_predict": 256}
+            )
+            raw = ""
+            if hasattr(response, "message") and getattr(response, "message", None) is not None:
+                raw = getattr(response.message, "content", "") or ""
+            elif isinstance(response, dict) and "message" in response:
+                raw = str(response["message"].get("content", "") or "")
+            else:
+                raw = str(response or "")
+
+            raw = raw.strip()
+            # Nettoyer d'éventuels backticks markdown
+            if "```" in raw:
+                raw = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
+
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1:
+                json_str = raw[start:end+1]
+                facts = json.loads(json_str)
+                if isinstance(facts, dict) and facts:
+                    clean_facts = {str(k).strip(): str(v).strip() for k, v in facts.items() if k and v}
+                    if clean_facts:
+                        self.db.update_profile_batch(clean_facts)
+                        logger.info(f"[MemoryManager] Faits utilisateur extraits et enregistrés : {list(clean_facts.keys())}")
+        except Exception as e:
+            logger.debug(f"[MemoryManager] Extraction du profil utilisateur ignorée : {e}")

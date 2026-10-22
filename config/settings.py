@@ -50,6 +50,7 @@ class Settings:
     SQLITE_DB_PATH: str = os.getenv("SQLITE_DB_PATH", "data/jarvis.db")
     SHORT_TERM_MAX_TURNS: int = int(os.getenv("SHORT_TERM_MAX_TURNS", "5"))
     RAG_SIMILARITY_THRESHOLD: float = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "1.2"))
+    SUMMARIZE_EVERY_N_TURNS: int = int(os.getenv("SUMMARIZE_EVERY_N_TURNS", "8"))
 
     # --- Actions PC (Étape 6) ---
     FS_MAX_FILE_SIZE_MB: int = int(os.getenv("FS_MAX_FILE_SIZE_MB", "50"))

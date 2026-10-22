@@ -10,7 +10,7 @@ class LongTermMemory:
     """
     Mémoire Épisodique de JARVIS.
     Stocke les résumés de conversation sous forme vectorielle pour la recherche par similarité (RAG).
-    Utilise ChromaDB et le modèle d'embedding 'all-MiniLM-L6-v2'.
+    Utilise ChromaDB et le modèle d'embedding 'paraphrase-multilingual-MiniLM-L12-v2'.
     
     Intègre un seuil de similarité (distance_threshold) pour rejeter les documents
     non pertinents et éviter la pollution du contexte LLM.
@@ -27,7 +27,7 @@ class LongTermMemory:
         
         # Initialisation de la fonction d'embedding (s'exécute localement)
         self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
+            model_name="paraphrase-multilingual-MiniLM-L12-v2"
         )
         
         # Récupération ou création de la collection

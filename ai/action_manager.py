@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from typing import Dict, Any, Optional
 
 from tools.base_tool import BaseTool, RiskLevel
@@ -8,6 +9,7 @@ from tools.web_search import WebSearchTool
 from tools.app_controller import AppControllerTool
 from tools.file_manager import FileReadTool, FileWriteTool
 from tools.shell_execute import ShellCommandTool
+from tools.system_info import SystemInfoTool
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ class ActionManager:
     def __init__(self, bridge=None) -> None:
         self.bridge = bridge
         self.tools: Dict[str, BaseTool] = {}
+        self.db = None
+        self.session_id: str = ""
         
         # Enregistrement des outils
         self.register_tool(WebSearchTool())
@@ -27,6 +31,7 @@ class ActionManager:
         self.register_tool(FileReadTool())
         self.register_tool(FileWriteTool())
         self.register_tool(ShellCommandTool())
+        self.register_tool(SystemInfoTool())
         
         # État temporaire pour les actions en attente de confirmation
         self.pending_actions: Dict[str, dict] = {}
@@ -34,6 +39,12 @@ class ActionManager:
         if self.bridge:
             # Connecter les retours de l'UI
             pass # TODO: JS to Python slots via QWebChannel
+
+    def set_db(self, db, session_id: str = "") -> None:
+        """Injecte la base de données pour l'audit trail."""
+        self.db = db
+        if session_id:
+            self.session_id = session_id
 
     def register_tool(self, tool: BaseTool) -> None:
         self.tools[tool.name] = tool
@@ -131,7 +142,31 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
             if tool.risk_level == RiskLevel.SAFE:
                 # Exécution directe
                 logger.info(f"[ActionManager] Exécution directe (SAFE) de {tool.name}")
-                result = tool.execute(params)
+                t0 = time.time()
+                success = True
+                try:
+                    result = tool.execute(params)
+                except Exception as e:
+                    result = f"Erreur lors de l'exécution de {tool.name}: {e}"
+                    success = False
+                exec_time_ms = int((time.time() - t0) * 1000)
+
+                # Journal d'audit
+                if self.db:
+                    try:
+                        self.db.save_audit_log(
+                            session_id=self.session_id,
+                            tool_name=tool.name,
+                            params=params,
+                            result=str(result),
+                            risk_level=tool.risk_level.value,
+                            user_confirmed=False,
+                            execution_time_ms=exec_time_ms,
+                            success=success
+                        )
+                    except Exception as e:
+                        logger.error(f"[ActionManager] Erreur enregistrement audit: {e}")
+
                 return True, f"\n[RÉSULTAT DE L'OUTIL {tool.name}]\n{result}\n"
             else:
                 # Demande de confirmation
@@ -165,8 +200,31 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
         params = action["params"]
         
         logger.info(f"[ActionManager] Exécution post-confirmation de {tool.name}")
-        result = tool.execute(params)
-        
+        t0 = time.time()
+        success = True
+        try:
+            result = tool.execute(params)
+        except Exception as e:
+            result = f"Erreur lors de l'exécution de {tool.name}: {e}"
+            success = False
+        exec_time_ms = int((time.time() - t0) * 1000)
+
+        # Journal d'audit
+        if self.db:
+            try:
+                self.db.save_audit_log(
+                    session_id=self.session_id,
+                    tool_name=tool.name,
+                    params=params,
+                    result=str(result),
+                    risk_level=tool.risk_level.value,
+                    user_confirmed=True,
+                    execution_time_ms=exec_time_ms,
+                    success=success
+                )
+            except Exception as e:
+                logger.error(f"[ActionManager] Erreur enregistrement audit: {e}")
+
         if self.bridge:
             self.bridge.action_executed_success.emit(f"Action '{tool.name}' terminée.")
             

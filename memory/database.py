@@ -63,6 +63,22 @@ class Database:
                 )
             ''')
 
+            # Table: audit_log (Journal d'audit des actions exécutées)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    session_id TEXT,
+                    tool_name TEXT,
+                    params TEXT,
+                    result TEXT,
+                    risk_level TEXT,
+                    user_confirmed BOOLEAN,
+                    execution_time_ms INTEGER,
+                    success BOOLEAN
+                )
+            ''')
+
             conn.commit()
         logger.debug(f"[Database] Schéma initialisé dans {self.db_path}")
 
@@ -104,6 +120,21 @@ class Database:
             conn.commit()
         logger.debug(f"[Database] Profil mis à jour : {key}={value}")
 
+    def update_profile_batch(self, facts: dict[str, str]) -> None:
+        """Met à jour plusieurs clés/valeurs du profil utilisateur en une seule transaction."""
+        if not facts:
+            return
+        timestamp = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            for k, v in facts.items():
+                if k and v:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO user_profile (key, value, updated_at) VALUES (?, ?, ?)",
+                        (str(k).strip(), str(v).strip(), timestamp)
+                    )
+            conn.commit()
+        logger.info(f"[Database] Profil utilisateur enrichi avec {len(facts)} fait(s).")
+
     def get_profile(self) -> dict[str, str]:
         """Retourne l'intégralité du profil utilisateur."""
         with self._get_connection() as conn:
@@ -143,5 +174,64 @@ class Database:
             for row in cursor.fetchall():
                 d = dict(row)
                 d["topics"] = json.loads(d["topics"])
+                rows.append(d)
+            return rows
+
+    # ── CRUD Audit Trail ─────────────────────────────────────────────────────
+
+    def save_audit_log(
+        self,
+        session_id: str,
+        tool_name: str,
+        params: dict,
+        result: str,
+        risk_level: str,
+        user_confirmed: bool = False,
+        execution_time_ms: int = 0,
+        success: bool = True,
+    ) -> None:
+        """Enregistre l'exécution d'un outil dans le journal d'audit."""
+        timestamp = datetime.now().isoformat()
+        params_json = json.dumps(params, ensure_ascii=False)
+        # Tronquer le résultat pour ne pas saturer SQLite si fichier ou sortie volumineuse
+        truncated_result = (result[:1000] + "...") if len(result) > 1000 else result
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_log (
+                    timestamp, session_id, tool_name, params, result, 
+                    risk_level, user_confirmed, execution_time_ms, success
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    timestamp, session_id, tool_name, params_json, truncated_result,
+                    risk_level, 1 if user_confirmed else 0, execution_time_ms, 1 if success else 0
+                )
+            )
+            conn.commit()
+        logger.debug(f"[Database] Action auditée : {tool_name} (succès={success})")
+
+    def get_audit_logs(self, limit: int = 50, session_id: Optional[str] = None) -> list[dict]:
+        """Récupère les derniers logs d'audit."""
+        with self._get_connection() as conn:
+            if session_id:
+                cursor = conn.execute(
+                    "SELECT * FROM audit_log WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+                    (session_id, limit)
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?",
+                    (limit,)
+                )
+            rows = []
+            for row in cursor.fetchall():
+                d = dict(row)
+                try:
+                    d["params"] = json.loads(d["params"])
+                except Exception:
+                    pass
+                d["user_confirmed"] = bool(d["user_confirmed"])
+                d["success"] = bool(d["success"])
                 rows.append(d)
             return rows

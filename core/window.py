@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         # 3. Gestionnaire de mémoire (court et long terme)
         self.memory_manager = MemoryManager(self.settings, self.action_manager)
         self.memory_manager.set_system_prompt(system_prompt, persona=persona)
+        self.action_manager.set_db(self.memory_manager.db, self.memory_manager.session_id)
 
         # 4. LLM Manager (connecte token_received -> bridge.send_token en interne)
         self.llm_manager = LLMManager(self.settings, self.bridge)

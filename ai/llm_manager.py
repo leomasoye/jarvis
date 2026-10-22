@@ -15,6 +15,7 @@ Flux de données :
     LLMThread.error_occurred    → LLMManager._on_error   → notification + statut erreur
 """
 import re
+import time
 import logging
 import ollama
 from PyQt6.QtCore import QThread, QObject, pyqtSignal
@@ -265,14 +266,43 @@ class LLMManager(QObject):
     # Nombre maximum de boucles outil → LLM → outil (garde-fou anti-boucle)
     MAX_TOOL_LOOPS = 3
 
-    # Paramètres de génération Ollama optimisés pour la production
-    GENERATION_OPTIONS = {
-        "temperature": 0.4,       # Réduit la créativité/hallucination (défaut: 0.8)
-        "top_p": 0.85,            # Nucleus sampling plus conservateur
-        "top_k": 40,              # Limite le vocabulaire considéré
-        "repeat_penalty": 1.15,   # Pénalise la répétition (réduit les monologues)
-        "num_predict": 1024,      # Limite la longueur des réponses
+    # Profils de génération adaptatifs selon la nature de la tâche
+    GENERATION_PROFILES = {
+        "factual": {       # Recherche, faits, météo, actions système
+            "temperature": 0.1,
+            "top_p": 0.8,
+            "top_k": 30,
+            "repeat_penalty": 1.2,
+            "num_predict": 1024,
+        },
+        "conversational": { # Discussion, opinion, général
+            "temperature": 0.6,
+            "top_p": 0.9,
+            "top_k": 50,
+            "repeat_penalty": 1.1,
+            "num_predict": 1024,
+        },
+        "code": {          # Programmation, scripts, debug, terminal
+            "temperature": 0.2,
+            "top_p": 0.85,
+            "top_k": 40,
+            "repeat_penalty": 1.15,
+            "num_predict": 2048,
+        },
+        "creative": {      # Histoires, poèmes, brainstorming
+            "temperature": 0.8,
+            "top_p": 0.95,
+            "top_k": 60,
+            "repeat_penalty": 1.05,
+            "num_predict": 1536,
+        },
     }
+
+    # Paramètres par défaut
+    GENERATION_OPTIONS = GENERATION_PROFILES["conversational"]
+
+    # TTL du cache de la liste des modèles (2 minutes)
+    CACHE_TTL_MODELS = 120.0
 
     def __init__(self, settings, bridge) -> None:
         super().__init__()
@@ -281,6 +311,10 @@ class LLMManager(QObject):
         self._active_model: str = settings.OLLAMA_MODEL_FAST
         self._route_mode: str = "AUTO"  # Modes: AUTO, FIXED_FAST, FIXED_ADVANCED
         self._tool_loop_count: int = 0  # Compteur de boucles outil
+
+        # Cache de la liste des modèles installés
+        self._models_cache: list[str] = []
+        self._models_cache_time: float = 0.0
 
         # Référence vers le gestionnaire de mémoire (injectée par window.py)
         self._memory_manager = None
@@ -314,25 +348,56 @@ class LLMManager(QObject):
 
     # ── API publique ─────────────────────────────────────────────────────────
 
-    def get_available_models(self) -> list[str]:
-        """Récupère la liste des modèles installés via l'API Ollama locale."""
+    def get_available_models(self, force_refresh: bool = False) -> list[str]:
+        """Récupère la liste des modèles installés via l'API Ollama avec mise en cache TTL."""
+        if not force_refresh and self._models_cache and (time.time() - self._models_cache_time < self.CACHE_TTL_MODELS):
+            return self._models_cache
+
         try:
             client = ollama.Client(host=self._settings.OLLAMA_BASE_URL)
             response = client.list()
             models_data = getattr(response, 'models', response.get('models', [])) if isinstance(response, dict) else response.models if hasattr(response, 'models') else response
-            return [m.model if hasattr(m, 'model') else m.get('model', '') for m in models_data]
+            self._models_cache = [m.model if hasattr(m, 'model') else m.get('model', '') for m in models_data]
+            self._models_cache_time = time.time()
+            return self._models_cache
         except Exception as e:
             logger.error(f"Erreur get_available_models: {e}")
-            return []
+            return self._models_cache or []
+
+    def _detect_generation_profile(self, content: str, is_action_result: bool) -> str:
+        """Détermine le profil de génération le plus adapté selon le contexte."""
+        if is_action_result:
+            return "factual"
+
+        content_lower = content.lower()
+        if any(kw in content_lower for kw in ["code", "script", "programme", "erreur", "bug", "terminal", "python", "javascript", "fonction", "classe", "sql"]):
+            return "code"
+        if any(kw in content_lower for kw in ["cherche", "internet", "web", "météo", "actualité", "trouve sur", "recherche", "heure", "date"]):
+            return "factual"
+        if any(kw in content_lower for kw in ["invente", "poème", "histoire", "blague", "raconte", "imagine"]):
+            return "creative"
+
+        return "conversational"
 
     def process(self, messages: list[dict]) -> None:
-        """Lance l'inférence avec la liste de messages fournie, en choisissant le modèle adapté."""
+        """Lance l'inférence avec la liste de messages fournie, en choisissant le modèle et le profil adaptés."""
         if not messages:
             return
 
         last_msg = messages[-1]
-        
-        # Application du routage en fonction du mode
+        content = ""
+        is_action_result = False
+        if last_msg.get("role") == "user":
+            content = last_msg.get("content", "")
+            is_action_result = content.lower().startswith("[résultat action]")
+
+        # 1. Sélection et application du profil de génération adaptatif
+        profile_name = self._detect_generation_profile(content, is_action_result)
+        options = dict(self.GENERATION_PROFILES.get(profile_name, self.GENERATION_OPTIONS))
+        self._thread.set_options(options)
+        logger.debug(f"[LLMManager] Profil de génération appliqué: {profile_name} (temp={options.get('temperature')})")
+
+        # 2. Application du routage de modèle
         if self._route_mode == "FIXED_FAST":
             if self._active_model != self._settings.OLLAMA_MODEL_FAST:
                 self.set_model(self._settings.OLLAMA_MODEL_FAST, update_ui_type="FIXE - RAPIDE")
@@ -340,57 +405,50 @@ class LLMManager(QObject):
             if self._active_model != self._settings.OLLAMA_MODEL_ADVANCED:
                 self.set_model(self._settings.OLLAMA_MODEL_ADVANCED, update_ui_type="FIXE - AVANCÉ")
         elif self._route_mode == "AUTO":
-            if last_msg.get("role") == "user":
-                content = last_msg.get("content", "").lower()
-                is_action_result = content.startswith("[résultat action]")
+            if last_msg.get("role") == "user" and not is_action_result:
+                # Détection de l'intention
+                is_code = profile_name == "code"
+                is_search = profile_name == "factual"
                 
-                if not is_action_result:
-                    # 1. Détection de l'intention
-                    is_code = any(kw in content for kw in ["code", "script", "programme", "erreur", "bug", "terminal", "python", "js"])
-                    is_search = any(kw in content for kw in ["cherche", "internet", "web", "météo", "actualité", "trouve sur", "recherche"])
-                    
-                    # 2. Récupération dynamique des modèles
-                    available_models = self.get_available_models()
-                    
-                    best_model = self._settings.OLLAMA_MODEL_FAST
-                    ui_type = "AUTO - RAPIDE"
-                    
-                    if is_code:
-                        # Priorité aux modèles de code ou Qwen/Deepseek
-                        code_models = ["qwen", "codellama", "deepseek", "phind"]
-                        found = next((m for m in available_models if any(cm in m.lower() for cm in code_models)), None)
-                        if found:
-                            best_model = found
-                            ui_type = "AUTO - CODE"
-                        else:
-                            best_model = self._settings.OLLAMA_MODEL_ADVANCED
-                            ui_type = "AUTO - AVANCÉ"
-                            
-                    elif is_search:
-                        # Priorité aux modèles performants avec le Tool Calling
-                        tool_models = ["llama3.1", "llama3.2", "qwen2.5", "mistral-nemo"]
-                        found = next((m for m in available_models if any(tm in m.lower() for tm in tool_models)), None)
-                        if found:
-                            best_model = found
-                            ui_type = "AUTO - OUTILS/WEB"
-                        else:
-                            best_model = self._settings.OLLAMA_MODEL_ADVANCED
-                            ui_type = "AUTO - AVANCÉ"
-                            
+                # Récupération dynamique des modèles (avec cache TTL)
+                available_models = self.get_available_models()
+                
+                best_model = self._settings.OLLAMA_MODEL_FAST
+                ui_type = "AUTO - RAPIDE"
+                
+                if is_code:
+                    code_models = ["qwen", "codellama", "deepseek", "phind"]
+                    found = next((m for m in available_models if any(cm in m.lower() for cm in code_models)), None)
+                    if found:
+                        best_model = found
+                        ui_type = "AUTO - CODE"
                     else:
-                        # Tâche générale/discussion -> Mistral excelle en français
-                        fr_models = ["mistral", "mixtral", "gemma"]
-                        found = next((m for m in available_models if any(fm in m.lower() for fm in fr_models)), None)
-                        if found:
-                            best_model = found
-                            ui_type = "AUTO - FRANÇAIS"
-                        else:
-                            best_model = self._settings.OLLAMA_MODEL_FAST
-                            ui_type = "AUTO - RAPIDE"
-                            
-                    if self._active_model != best_model:
-                        logger.info(f"[LLMManager] Routage intelligent -> {best_model} (Raison: {ui_type})")
-                        self.set_model(best_model, update_ui_type=ui_type)
+                        best_model = self._settings.OLLAMA_MODEL_ADVANCED
+                        ui_type = "AUTO - AVANCÉ"
+                        
+                elif is_search:
+                    tool_models = ["llama3.1", "llama3.2", "qwen2.5", "mistral-nemo"]
+                    found = next((m for m in available_models if any(tm in m.lower() for tm in tool_models)), None)
+                    if found:
+                        best_model = found
+                        ui_type = "AUTO - OUTILS/WEB"
+                    else:
+                        best_model = self._settings.OLLAMA_MODEL_ADVANCED
+                        ui_type = "AUTO - AVANCÉ"
+                        
+                else:
+                    fr_models = ["mistral", "mixtral", "gemma"]
+                    found = next((m for m in available_models if any(fm in m.lower() for fm in fr_models)), None)
+                    if found:
+                        best_model = found
+                        ui_type = "AUTO - FRANÇAIS"
+                    else:
+                        best_model = self._settings.OLLAMA_MODEL_FAST
+                        ui_type = "AUTO - RAPIDE"
+                        
+                if self._active_model != best_model:
+                    logger.info(f"[LLMManager] Routage intelligent -> {best_model} (Raison: {ui_type})")
+                    self.set_model(best_model, update_ui_type=ui_type)
 
         self._thread.start_inference(messages, self._active_model)
 

@@ -95,12 +95,33 @@ class ShortTermMemory:
         result.extend(filtered)
         return result
 
-    # ── Gestion ───────────────────────────────────────────────────────────────
-
     def clear(self) -> None:
         """Vide le buffer (conserve le system prompt)."""
         self._messages.clear()
         logger.info("[Memory] Contexte de session effacé.")
+
+    def compress(self, summary: str) -> None:
+        """
+        Remplace la première moitié des messages par un message de résumé condensé,
+        préservant le contexte tout en libérant de la place dans la fenêtre d'attention.
+        """
+        if not summary or len(self._messages) < 4:
+            return
+
+        all_msgs = list(self._messages)
+        half = len(all_msgs) // 2
+        recent_half = all_msgs[half:]
+
+        # Reconstruction du deque avec le résumé en tête suivi des messages récents
+        self._messages.clear()
+        self._messages.append({
+            "role": "system",
+            "content": f"[RÉSUMÉ DU CONTEXTE ANTÉRIEUR] : {summary.strip()}"
+        })
+        for msg in recent_half:
+            self._messages.append(msg)
+
+        logger.info(f"[Memory] Contexte court-terme compressé : {len(all_msgs)} -> {len(self._messages)} messages.")
 
     # ── Propriétés ────────────────────────────────────────────────────────────
 
