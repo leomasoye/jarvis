@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Optional
 
 from tools.base_tool import BaseTool, RiskLevel
@@ -10,6 +11,7 @@ from tools.app_controller import AppControllerTool
 from tools.file_manager import FileReadTool, FileWriteTool
 from tools.shell_execute import ShellCommandTool
 from tools.system_info import SystemInfoTool
+from tools.clipboard import ClipboardTool
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ class ActionManager:
         self.register_tool(FileWriteTool())
         self.register_tool(ShellCommandTool())
         self.register_tool(SystemInfoTool())
+        self.register_tool(ClipboardTool())
         
         # État temporaire pour les actions en attente de confirmation
         self.pending_actions: Dict[str, dict] = {}
@@ -123,72 +126,160 @@ Exemple INCORRECT : "params": {"query": {"type": "string", "description": "Tokyo
 """
         return doc
 
+    def validate_and_sanitize_params(self, tool: BaseTool, raw_params: Any) -> tuple[bool, dict, str]:
+        """
+        Valide et assainit les paramètres fournis par le LLM.
+        - Déballe les éventuelles hallucinations structurelles type {"type": "string", "value": "xyz"}.
+        - Vérifie la présence des paramètres obligatoires.
+        - Valide et convertit les types attendus.
+        """
+        if raw_params is None:
+            raw_params = {}
+        if not isinstance(raw_params, dict):
+            return False, {}, f"Les paramètres doivent être un objet JSON (reçu: {type(raw_params).__name__})"
+
+        cleaned = {}
+        schema = getattr(tool, "parameters_schema", {}) or {}
+
+        for param_name, param_meta in schema.items():
+            if param_name not in raw_params:
+                desc = param_meta.get("description", "").lower()
+                is_optional = param_meta.get("optional", False) or "optionnel" in desc or "par défaut" in desc
+                if not is_optional and "default" not in param_meta:
+                    return False, {}, f"Paramètre obligatoire manquant : '{param_name}' pour l'outil '{tool.name}'."
+                continue
+
+            val = raw_params[param_name]
+            # Déballer si le LLM a mis un objet imbriqué type {"type": ..., "value": ...} ou {"value": ...}
+            if isinstance(val, dict):
+                if "value" in val:
+                    val = val["value"]
+                elif "description" in val and len(val) == 1:
+                    val = val["description"]
+
+            expected_type = param_meta.get("type", "string")
+            if expected_type == "string":
+                val = str(val) if val is not None else ""
+            elif expected_type == "integer":
+                try:
+                    val = int(val)
+                except (ValueError, TypeError):
+                    return False, {}, f"Paramètre '{param_name}' invalide : entier attendu."
+            elif expected_type == "boolean":
+                if isinstance(val, str):
+                    val = val.lower() in ("true", "1", "yes", "oui")
+                else:
+                    val = bool(val)
+
+            cleaned[param_name] = val
+
+        # Conserver les clés additionnelles
+        for k, v in raw_params.items():
+            if k not in cleaned:
+                cleaned[k] = v
+
+        return True, cleaned, "OK"
+
+    def _execute_safe_call(self, tool: BaseTool, params: dict) -> tuple[str, str, int, bool]:
+        """Exécute un outil SAFE avec mesure du temps et enregistrement dans l'audit."""
+        logger.info(f"[ActionManager] Exécution directe (SAFE) de {tool.name}")
+        t0 = time.time()
+        success = True
+        try:
+            result = tool.execute(params)
+        except Exception as e:
+            result = f"Erreur lors de l'exécution de {tool.name}: {e}"
+            success = False
+        exec_time_ms = int((time.time() - t0) * 1000)
+
+        if self.db:
+            try:
+                self.db.save_audit_log(
+                    session_id=self.session_id,
+                    tool_name=tool.name,
+                    params=params,
+                    result=str(result),
+                    risk_level=tool.risk_level.value,
+                    user_confirmed=False,
+                    execution_time_ms=exec_time_ms,
+                    success=success
+                )
+            except Exception as e:
+                logger.error(f"[ActionManager] Erreur enregistrement audit: {e}")
+
+        return tool.name, str(result), exec_time_ms, success
+
     def process_calls(self, calls: list[dict]) -> tuple[bool, Optional[str]]:
         """
-        Traite une liste d'appels.
-        Retourne (is_safe_executed, tool_result_text) si un outil SAFE a été exécuté.
-        Retourne (False, action_id) si un outil SENSITIVE/MODERATE demande confirmation.
-        Retourne (False, None) s'il n'y a rien à faire.
+        Traite une liste d'appels d'outils.
+        - Valide et assainit chaque paramètre.
+        - Exécute les outils SAFE (en parallèle si multiples).
+        - Demande confirmation pour les outils SENSITIVE / MODERATE.
         """
+        if not calls:
+            return False, None
+
+        # 1. Validation de l'existence des outils et de leurs paramètres
+        prepared_calls = []
         for call in calls:
-            tool_name = str(call.get("tool") or "")
-            params = call.get("params", {})
-            
+            tool_name = str(call.get("tool") or "").strip()
+            raw_params = call.get("params", {})
+
             tool = self.tools.get(tool_name) if tool_name else None
             if not tool:
                 logger.warning(f"[ActionManager] Outil inconnu : {tool_name}")
                 return True, f"Erreur système : l'outil '{tool_name}' n'existe pas."
 
-            if tool.risk_level == RiskLevel.SAFE:
-                # Exécution directe
-                logger.info(f"[ActionManager] Exécution directe (SAFE) de {tool.name}")
-                t0 = time.time()
-                success = True
+            valid, clean_params, err_msg = self.validate_and_sanitize_params(tool, raw_params)
+            if not valid:
+                logger.warning(f"[ActionManager] Paramètres invalides pour {tool_name} : {err_msg}")
+                return True, f"Erreur de validation pour '{tool_name}' : {err_msg}"
+
+            prepared_calls.append({"tool": tool, "params": clean_params, "raw_call": call})
+
+        # 2. Vérifier s'il y a un outil sensible nécessitant confirmation
+        sensitive_item = next((item for item in prepared_calls if item["tool"].risk_level != RiskLevel.SAFE), None)
+        if sensitive_item:
+            tool = sensitive_item["tool"]
+            params = sensitive_item["params"]
+            raw_call = sensitive_item["raw_call"]
+            action_id = f"{tool.name}_{id(raw_call)}"
+            self.pending_actions[action_id] = {"tool": tool, "params": params}
+            logger.info(f"[ActionManager] Action {tool.name} nécessite confirmation (ID: {action_id}).")
+
+            payload = json.dumps({
+                "id": action_id,
+                "tool": tool.name,
+                "description": tool.description,
+                "params": params,
+                "risk": tool.risk_level.value
+            })
+            if self.bridge:
+                self.bridge.action_requires_confirmation.emit(payload)
+            return False, action_id
+
+        # 3. Tous les outils sont SAFE
+        if len(prepared_calls) == 1:
+            item = prepared_calls[0]
+            name, res, _, _ = self._execute_safe_call(item["tool"], item["params"])
+            return True, f"\n[RÉSULTAT DE L'OUTIL {name}]\n{res}\n"
+
+        # Exécution parallèle pour les outils SAFE multiples
+        results_formatted = []
+        with ThreadPoolExecutor(max_workers=min(4, len(prepared_calls))) as executor:
+            futures = [
+                executor.submit(self._execute_safe_call, item["tool"], item["params"])
+                for item in prepared_calls
+            ]
+            for future in as_completed(futures):
                 try:
-                    result = tool.execute(params)
+                    name, res, _, _ = future.result()
+                    results_formatted.append(f"[RÉSULTAT DE L'OUTIL {name}]\n{res}")
                 except Exception as e:
-                    result = f"Erreur lors de l'exécution de {tool.name}: {e}"
-                    success = False
-                exec_time_ms = int((time.time() - t0) * 1000)
+                    results_formatted.append(f"[ERREUR OUTIL]\n{e}")
 
-                # Journal d'audit
-                if self.db:
-                    try:
-                        self.db.save_audit_log(
-                            session_id=self.session_id,
-                            tool_name=tool.name,
-                            params=params,
-                            result=str(result),
-                            risk_level=tool.risk_level.value,
-                            user_confirmed=False,
-                            execution_time_ms=exec_time_ms,
-                            success=success
-                        )
-                    except Exception as e:
-                        logger.error(f"[ActionManager] Erreur enregistrement audit: {e}")
-
-                return True, f"\n[RÉSULTAT DE L'OUTIL {tool.name}]\n{result}\n"
-            else:
-                # Demande de confirmation
-                action_id = f"{tool.name}_{id(call)}"
-                self.pending_actions[action_id] = {"tool": tool, "params": params}
-                logger.info(f"[ActionManager] Action {tool.name} nécessite confirmation (ID: {action_id}).")
-                
-                # Convertir en JSON pour le Bridge
-                payload = json.dumps({
-                    "id": action_id,
-                    "tool": tool.name,
-                    "description": tool.description,
-                    "params": params,
-                    "risk": tool.risk_level.value
-                })
-                
-                if self.bridge:
-                    self.bridge.action_requires_confirmation.emit(payload)
-                
-                return False, action_id
-
-        return False, None
+        combined_output = "\n\n" + "\n\n".join(results_formatted) + "\n"
+        return True, combined_output
 
     def execute_pending(self, action_id: str) -> str:
         """Exécute une action après confirmation utilisateur."""

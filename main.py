@@ -52,6 +52,9 @@ def main() -> int:
     settings = Settings()
     setup_logging(settings)
 
+    from core.health_check import run_system_health_check
+    run_system_health_check(settings)
+
     log = logging.getLogger(__name__)
     log.info("=" * 60)
     log.info(f"  {settings.APP_NAME} — Démarrage  (v{settings.APP_VERSION})")
